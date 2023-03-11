@@ -185,7 +185,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             fw_version = ilo.get_fw_version()["firmware_version"]
             # prometheus_metrics.hpilo_firmware_version.set(fw_version)
             prometheus_metrics.hpilo_firmware_version.labels(product_name=product_name,
-                                                             server_name=server_name).info({'Firmware Version': fw_version})
+                                                             server_name=server_name).info({'firmware_version': fw_version})
 
             # Temperatures
             host_power_state = ilo.get_host_power_status()
