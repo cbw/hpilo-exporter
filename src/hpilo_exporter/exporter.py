@@ -7,13 +7,13 @@ import sys
 import hpilo
 
 import time
-import prometheus_metrics
-from BaseHTTPServer import BaseHTTPRequestHandler
-from BaseHTTPServer import HTTPServer
-from SocketServer import ForkingMixIn
+from . import prometheus_metrics
+from http.server import BaseHTTPRequestHandler
+from http.server import HTTPServer
+from socketserver import ForkingMixIn
 from prometheus_client import generate_latest, Summary
-from urlparse import parse_qs
-from urlparse import urlparse
+from urllib.parse import parse_qs
+from urllib.parse import urlparse
 
 
 def print_err(*args, **kwargs):
@@ -61,7 +61,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             ilo_port = int(query_components['ilo_port'][0])
             ilo_user = query_components['ilo_user'][0]
             ilo_password = query_components['ilo_password'][0]
-        except KeyError, e:
+        except KeyError as e:
             print_err("missing parameter %s" % e)
             self.return_error()
             error_detected = True
@@ -80,7 +80,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             except gaierror:
                 print("ILO invalid address or port")
                 self.return_error()
-            except hpilo.IloCommunicationError, e:
+            except hpilo.IloCommunicationError as e:
                 print(e)
 
             # get product and server name
@@ -131,12 +131,87 @@ class RequestHandler(BaseHTTPRequestHandler):
                                                                     nic_name=nic_name,
                                                                     ip_address=nic['ip_address']).set(value)
 
+            # Fan speeds
+            for _,fan in embedded_health['fans'].items():
+                fan_name = fan['label']
+                try:
+                    fan_status = ['OK','Disabled','Not Installed','Failed'].index(fan['status'])
+                except ValueError:
+                    fan_status = 4
+                    print_err('unrecognised fan status: {}'.format(fan['status']))
+
+                prometheus_metrics.hpilo_fan_status_gauge.labels(product_name=product_name,
+                                                                    server_name=server_name,
+                                                                    fan_name=fan_name).set(fan_status)
+                
+                if fan['speed'] is not None:
+                    (fan_speed, _) = fan['speed']
+                    prometheus_metrics.hpilo_fan_speed_gauge.labels(product_name=product_name,
+                                                                    server_name=server_name,
+                                                                    fan_name=fan_name).set(fan_speed)
+                    
+            # Temperatures
+            for _,temperature in embedded_health['temperature'].items():
+                thermometer_name = temperature['label']
+                try:
+                    temp_status = ['OK','Disabled','Not Installed','Failed'].index(temperature['status'])
+                except ValueError:
+                    temp_status = 4
+                    print_err('unrecognised temperature status: {}'.format(temperature['status']))
+
+                prometheus_metrics.hpilo_temp_status_gauge.labels(product_name=product_name,
+                                                                    server_name=server_name,
+                                                                    thermometer_name=thermometer_name).set(temp_status)
+                                    
+                if type(temperature['currentreading']) is tuple:
+                    (cur_temp, _) = temperature['currentreading']
+                    prometheus_metrics.hpilo_temp_gauge.labels(product_name=product_name,
+                                                               server_name=server_name,
+                                                               thermometer_name=thermometer_name).set(cur_temp)
+
+                if type(temperature['caution']) is tuple:
+                    (caution_temp, _) = temperature['caution']
+                    prometheus_metrics.hpilo_temp_caution_gauge.labels(product_name=product_name,
+                                                                       server_name=server_name,
+                                                                       thermometer_name=thermometer_name).set(caution_temp)
+
+                if type(temperature['critical']) is tuple:
+                    (critical_temp, _) = temperature['critical']
+                    prometheus_metrics.hpilo_temp_critical_gauge.labels(product_name=product_name,
+                                                                        server_name=server_name,
+                                                                        thermometer_name=thermometer_name).set(critical_temp)
+
             # get firmware version
             fw_version = ilo.get_fw_version()["firmware_version"]
             # prometheus_metrics.hpilo_firmware_version.set(fw_version)
             prometheus_metrics.hpilo_firmware_version.labels(product_name=product_name,
-                                                             server_name=server_name).set(fw_version)
+                                                             server_name=server_name).info({'Firmware Version': fw_version})
 
+            # Temperatures
+            host_power_state = ilo.get_host_power_status()
+            try:
+                power_status = ['OFF','ON'].index(host_power_state)
+            except ValueError:
+                power_status = 2
+                print_err('unrecognised power state: {}'.format(host_power_state))
+
+                prometheus_metrics.hpilo_host_power_gauge.labels(product_name=product_name,
+                                                                 server_name=server_name).set(power_status)
+                
+            # Server uptime
+            try:
+                uptime = ilo.get_server_power_on_time()
+                prometheus_metrics.hpilo_host_uptime_gauge.labels(product_name=product_name,
+                                                                  server_name=server_name).set(uptime)
+            except Exception as e:
+                print_err('exception when calling get_server_power_on_time(): {}'.format(e))
+
+
+            # Network info
+            network = ilo.get_network_settings()
+            prometheus_metrics.hpilo_ip_address.labels(product_name=product_name,
+                                                       server_name=server_name).info({'ip_address': network['ip_address']})
+            
             # get the amount of time the request took
             REQUEST_TIME.observe(time.time() - start_time)
 
