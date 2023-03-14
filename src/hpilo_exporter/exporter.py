@@ -3,6 +3,7 @@ Pulls data from specified iLO and presents as Prometheus metrics
 """
 from __future__ import print_function
 from _socket import gaierror
+import os
 import sys
 import hpilo
 
@@ -54,17 +55,31 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         ilo_host = None
         ilo_port = None
-        ilo_user = None
-        ilo_password = None
+        ilo_user = os.getenv('ILO_USERNAME')
+        ilo_password = os.getenv('ILO_PASSWORD')
         try:
             ilo_host = query_components['ilo_host'][0]
             ilo_port = int(query_components['ilo_port'][0])
-            ilo_user = query_components['ilo_user'][0]
-            ilo_password = query_components['ilo_password'][0]
         except KeyError as e:
             print_err("missing parameter %s" % e)
             self.return_error()
             error_detected = True
+
+        if ilo_user is None:
+            try:
+                ilo_user = query_components['ilo_user'][0]
+            except KeyError as e:
+                print_err("missing parameter %s" % e)
+                self.return_error()
+                error_detected = True
+
+        if ilo_password is None:
+            try:
+                ilo_password = query_components['ilo_password'][0]
+            except KeyError as e:
+                print_err("missing parameter %s" % e)
+                self.return_error()
+                error_detected = True
 
         if url.path == self.server.endpoint and ilo_host and ilo_user and ilo_password and ilo_port:
 
